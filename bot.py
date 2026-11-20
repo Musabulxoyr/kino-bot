@@ -90,8 +90,9 @@ async def bots_not_started(user_id: int):
             await b.send_chat_action(user_id, "typing")
         except (TelegramForbiddenError, TelegramBadRequest):
             missing.append(uname)
-        except Exception:
-            pass  # tarmoq xatosi: o'tkazib yuboramiz
+        except Exception as e:
+            # Masalan, token noto'g'ri (Unauthorized): logga yozamiz
+            print(f"REQUIRED_BOTS @{uname} xato: {type(e).__name__}: {e}")
     return missing
 
 
@@ -127,7 +128,12 @@ def is_admin(m: Message) -> bool:
 
 
 @dp.message(Command("start"))
-async def start(m: Message):
+async def start(m: Message, bot: Bot):
+    if (CHANNELS or REQUIRED_BOTS) and not is_admin(m):
+        missing = await missing_items(bot, m.from_user.id)
+        if missing:
+            await m.answer(SUB_TEXT, reply_markup=sub_kb(missing))
+            return
     text = "🎬 Salom! Kino kodini yuboring, men kinoni topib beraman."
     if is_admin(m):
         text += (
@@ -137,9 +143,32 @@ async def start(m: Message):
             "• Kodni o'zingiz bermoqchi bo'lsangiz: #125 Titanik\n"
             "• Uzatilgan videoga nomni reply qilib yozing\n"
             "• /list — barcha kinolar\n"
-            "• /delete 125 — kinoni o'chirish"
+            "• /delete 125 — kinoni o'chirish\n"
+            "• /holat — majburiy obuna holatini tekshirish"
         )
     await m.answer(text)
+
+
+@dp.message(Command("holat"), F.from_user.id.in_(ADMIN_IDS))
+async def holat(m: Message, bot: Bot):
+    lines = [
+        f"📢 Kanallar (CHANNELS): {len(CHANNELS)} ta",
+        f"🤖 Majburiy botlar (REQUIRED_BOTS): {len(REQUIRED_BOTS)} ta",
+    ]
+    if not CHANNELS and not REQUIRED_BOTS:
+        lines.append(
+            "\n⚠️ Hech biri o'qilmadi: majburiy obuna o'chiq. "
+            "Railway Variables'ni tekshiring."
+        )
+    for uname, b in REQUIRED_BOTS:
+        try:
+            await b.send_chat_action(m.from_user.id, "typing")
+            lines.append(f"@{uname}: ✅ token ishlaydi, siz start qilgansiz")
+        except (TelegramForbiddenError, TelegramBadRequest):
+            lines.append(f"@{uname}: ✅ token ishlaydi, siz hali start qilmagansiz")
+        except Exception as e:
+            lines.append(f"@{uname}: ⚠️ xato ({type(e).__name__}), token noto'g'ri bo'lishi mumkin")
+    await m.answer("\n".join(lines))
 
 
 @dp.message(Command("list"), F.from_user.id.in_(ADMIN_IDS))
