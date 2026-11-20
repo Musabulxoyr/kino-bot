@@ -7,7 +7,9 @@ from aiogram.filters import Command, CommandObject
 from aiogram.types import Message
 
 TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+ADMIN_IDS = [
+    int(x) for x in os.getenv("ADMIN_ID", "0").replace(" ", "").split(",") if x.isdigit()
+]
 DB_PATH = os.getenv("DB_PATH", "movies.db")
 
 db = sqlite3.connect(DB_PATH)
@@ -22,7 +24,7 @@ BOT_INFO = {}
 
 
 def is_admin(m: Message) -> bool:
-    return m.from_user and m.from_user.id == ADMIN_ID
+    return m.from_user and m.from_user.id in ADMIN_IDS
 
 
 @dp.message(Command("start"))
@@ -39,7 +41,7 @@ async def start(m: Message):
     await m.answer(text)
 
 
-@dp.message(Command("list"), F.from_user.id == ADMIN_ID)
+@dp.message(Command("list"), F.from_user.id.in_(ADMIN_IDS))
 async def list_movies(m: Message):
     rows = db.execute("SELECT code, title FROM movies ORDER BY rowid").fetchall()
     if not rows:
@@ -48,7 +50,7 @@ async def list_movies(m: Message):
     await m.answer("\n".join(f"{c} — {t or 'nomsiz'}" for c, t in rows)[:4000])
 
 
-@dp.message(Command("delete"), F.from_user.id == ADMIN_ID)
+@dp.message(Command("delete"), F.from_user.id.in_(ADMIN_IDS))
 async def delete_movie(m: Message, command: CommandObject):
     code = (command.args or "").strip()
     if not code:
@@ -75,7 +77,7 @@ def save_movie(src: Message, text: str) -> str:
     return code
 
 
-@dp.message(F.video | F.document, F.from_user.id == ADMIN_ID)
+@dp.message(F.video | F.document, F.from_user.id.in_(ADMIN_IDS))
 async def add_movie(m: Message):
     # Uzatilgan (forward) video: kodni reply orqali olamiz
     if m.forward_origin:
@@ -91,7 +93,7 @@ async def add_movie(m: Message):
 
 @dp.message(
     F.text,
-    F.from_user.id == ADMIN_ID,
+    F.from_user.id.in_(ADMIN_IDS),
     F.reply_to_message.video | F.reply_to_message.document,
 )
 async def add_movie_by_reply(m: Message):
