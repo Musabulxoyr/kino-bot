@@ -186,6 +186,18 @@ async def check_sub(c: CallbackQuery, bot: Bot):
     await c.answer()
 
 
+async def notify_admins(bot: Bot, m: Message, query: str):
+    """Topilmagan kino nomini adminlarga yuboradi."""
+    u = m.from_user
+    who = f"@{u.username}" if u.username else u.full_name
+    text = f"🔔 Yuklanmagan kino so'raldi:\n🎬 {query[:100]}\n👤 {who} (ID: {u.id})"
+    for admin_id in ADMIN_IDS:
+        try:
+            await bot.send_message(admin_id, text)
+        except Exception:
+            pass
+
+
 async def send_movie(m: Message, file_id: str, kind: str, title: str):
     link = f"🤖 https://t.me/{BOT_INFO.get('username', '')}"
     caption = f"🎬 {title}\n\n{link}" if title else link
@@ -222,7 +234,15 @@ async def get_movie(m: Message, bot: Bot):
     found = [r for r in rows if q in (r[3] or "").casefold()]
 
     if not found:
-        await m.answer("❌ Bunday kino topilmadi. Kod yoki nomini tekshirib qayta yozing.")
+        if query.isdigit():
+            await m.answer("❌ Bunday kodli kino topilmadi.")
+        else:
+            await m.answer(
+                "😔 Kechirasiz, ushbu kino hali yuklanmagan.\n"
+                "Tez orada yuklanadi, kuzatib boring!"
+            )
+            if not is_admin(m):
+                await notify_admins(bot, m, query)
     elif len(found) == 1:
         _code, file_id, kind, title = found[0]
         await send_movie(m, file_id, kind, title)
