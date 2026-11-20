@@ -84,7 +84,9 @@ async def start(m: Message):
         text += (
             "\n\n👑 Admin buyruqlari:\n"
             "• Kino qo'shish: videoni yuboring, izohiga (caption) "
-            "kod va nom yozing. Masalan: 125 Titanik\n"
+            "faqat kino nomini yozing. Kod avtomatik beriladi.\n"
+            "• Kodni o'zingiz bermoqchi bo'lsangiz: #125 Titanik\n"
+            "• Uzatilgan videoga nomni reply qilib yozing\n"
             "• /list — barcha kinolar\n"
             "• /delete 125 — kinoni o'chirish"
         )
@@ -119,13 +121,19 @@ def next_code() -> str:
 
 
 def save_movie(src: Message, text: str):
-    """(saqlandimi, kod) qaytaradi. Kod band bo'lsa, saqlamaydi."""
-    parts = text.strip().split(maxsplit=1)
-    code = parts[0]
-    title = parts[1] if len(parts) > 1 else ""
-    exists = db.execute("SELECT 1 FROM movies WHERE code = ?", (code,)).fetchone()
-    if exists:
-        return False, code
+    """(saqlandimi, kod, nom) qaytaradi.
+    Oddiy matn = kino nomi, kod avtomatik beriladi.
+    "#125 Titanik" = kodni o'zingiz berasiz."""
+    text = text.strip()
+    if text.startswith("#"):
+        parts = text[1:].split(maxsplit=1)
+        code = parts[0] if parts else next_code()
+        title = parts[1] if len(parts) > 1 else ""
+        exists = db.execute("SELECT 1 FROM movies WHERE code = ?", (code,)).fetchone()
+        if exists:
+            return False, code, title
+    else:
+        code, title = next_code(), text
     if src.video:
         file_id, kind = src.video.file_id, "video"
     else:
@@ -135,20 +143,11 @@ def save_movie(src: Message, text: str):
         (code, file_id, kind, title),
     )
     db.commit()
-    return True, code
+    return True, code, title
 
 
-@dp.message(F.video | F.document, F.from_user.id.in_(ADMIN_IDS))
-async def add_movie(m: Message):
-    # Uzatilgan (forward) video: kodni reply orqali olamiz
-    if m.forward_origin:
-        await m.reply("Kodni shu videoga javob (reply) qilib yozing. Masalan: 125 Titanik")
-        return
-    caption = (m.caption or "").strip()
-    if not caption:
-        await m.answer("Videoning izohiga kod yozing. Masalan: 125 Titanik")
-        return
-    ok, code = save_movie(m, caption)
+async def reply_saved(m: Message, result):
+    ok, code, title = result
     if not ok:
         await m.answer(
             f"⚠️ Kechirasiz, siz {code} kodiga allaqachon kino joylagansiz.\n"
@@ -156,7 +155,22 @@ async def add_movie(m: Message):
             f"Yoki avval /delete {code} bilan eskisini o'chiring."
         )
         return
-    await m.answer(f"✅ Saqlandi. Kod: {code}\n➡️ Keyingi bo'sh kod: {next_code()}")
+    await m.answer(
+        f"✅ Saqlandi!\n🎬 {title or 'nomsiz'}\n🔢 Kod: {code}"
+    )
+
+
+@dp.message(F.video | F.document, F.from_user.id.in_(ADMIN_IDS))
+async def add_movie(m: Message):
+    # Uzatilgan (forward) video: nomni reply orqali olamiz
+    if m.forward_origin:
+        await m.reply("Kino nomini shu videoga javob (reply) qilib yozing. Masalan: Titanik")
+        return
+    caption = (m.caption or "").strip()
+    if not caption:
+        await m.answer("Videoning izohiga kino nomini yozing. Masalan: Titanik")
+        return
+    await reply_saved(m, save_movie(m, caption))
 
 
 @dp.message(
@@ -165,15 +179,7 @@ async def add_movie(m: Message):
     F.reply_to_message.video | F.reply_to_message.document,
 )
 async def add_movie_by_reply(m: Message):
-    ok, code = save_movie(m.reply_to_message, m.text)
-    if not ok:
-        await m.answer(
-            f"⚠️ Kechirasiz, siz {code} kodiga allaqachon kino joylagansiz.\n"
-            f"➡️ Keyingi bo'sh kod: {next_code()}\n"
-            f"Yoki avval /delete {code} bilan eskisini o'chiring."
-        )
-        return
-    await m.answer(f"✅ Saqlandi. Kod: {code}\n➡️ Keyingi bo'sh kod: {next_code()}")
+    await reply_saved(m, save_movie(m.reply_to_message, m.text))
 
 
 @dp.callback_query(F.data == "check_sub")
@@ -205,6 +211,25 @@ async def send_movie(m: Message, file_id: str, kind: str, title: str):
         await m.answer_video(file_id, caption=caption)
     else:
         await m.answer_document(file_id, caption=caption)
+
+
+@dp.callback_query(F.data.startswith("movie:"))
+async def movie_button(c: CallbackQuery, bot: Bot):
+    if CHANNELS and c.from_user.id not in ADMIN_IDS:
+        missing = await not_subscribed(bot, c.from_user.id)
+        if missing:
+            await c.message.answer(SUB_TEXT, reply_markup=sub_kb(missing))
+            await c.answer()
+            return
+    code = c.data.split(":", 1)[1]
+    row = db.execute(
+        "SELECT file_id, kind, title FROM movies WHERE code = ?", (code,)
+    ).fetchone()
+    if not row:
+        await c.answer("Bu kino topilmadi", show_alert=True)
+        return
+    await send_movie(c.message, *row)
+    await c.answer()
 
 
 @dp.message(F.text & ~F.text.startswith("/"))
@@ -247,10 +272,13 @@ async def get_movie(m: Message, bot: Bot):
         _code, file_id, kind, title = found[0]
         await send_movie(m, file_id, kind, title)
     else:
-        lines = [f"{c} — {t}" for c, _f, _k, t in found[:30]]
+        kb = InlineKeyboardBuilder()
+        for c, _f, _k, t in found[:20]:
+            kb.button(text=f"🎬 {t[:40]}", callback_data=f"movie:{c}")
+        kb.adjust(1)
         await m.answer(
-            "🔎 Bir nechta kino topildi. Keraklisining kodini yozing:\n\n"
-            + "\n".join(lines)
+            "🔎 Bir nechta kino topildi. Keraklisini tanlang 👇",
+            reply_markup=kb.as_markup(),
         )
 
 
