@@ -3,6 +3,7 @@ import asyncio
 import sqlite3
 
 from aiogram import Bot, Dispatcher, F
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.filters import Command, CommandObject
 from aiogram.types import CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -60,17 +61,65 @@ async def not_subscribed(bot: Bot, user_id: int):
     return missing
 
 
-def sub_kb(missing):
-    kb = InlineKeyboardBuilder()
-    for i, (_chat, link) in enumerate(missing, 1):
+def parse_required_bots():
+    """REQUIRED_BOTS=@bot1|TOKEN1,@bot2|TOKEN2 (o'zingizning botlaringiz)"""
+    res = []
+    for item in os.getenv("REQUIRED_BOTS", "").split(","):
+        item = item.strip()
+        if not item:
+            continue
+        uname, _, token = item.partition("|")
+        uname, token = uname.strip().lstrip("@"), token.strip()
+        if not uname or not token:
+            continue
+        try:
+            res.append((uname, Bot(token)))
+        except Exception:
+            print(f"REQUIRED_BOTS: @{uname} tokeni noto'g'ri, o'tkazib yuborildi")
+    return res
+
+
+REQUIRED_BOTS = parse_required_bots()
+
+
+async def bots_not_started(user_id: int):
+    """Foydalanuvchi boshqa botda /start bosmagan bo'lsa, o'sha bot yozolmaydi (403)."""
+    missing = []
+    for uname, b in REQUIRED_BOTS:
+        try:
+            await b.send_chat_action(user_id, "typing")
+        except (TelegramForbiddenError, TelegramBadRequest):
+            missing.append(uname)
+        except Exception:
+            pass  # tarmoq xatosi: o'tkazib yuboramiz
+    return missing
+
+
+async def missing_items(bot: Bot, user_id: int):
+    """[(tugma matni, havola)] — kanallar va botlar."""
+    items = []
+    for i, (_chat, link) in enumerate(await not_subscribed(bot, user_id), 1):
         if link:
-            kb.button(text=f"📢 {i}-kanalga obuna bo'lish", url=link)
+            items.append((f"📢 {i}-kanalga obuna bo'lish", link))
+    for uname in await bots_not_started(user_id):
+        items.append((f"🤖 @{uname} ni ishga tushirish", f"https://t.me/{uname}"))
+    return items
+
+
+def sub_kb(items):
+    kb = InlineKeyboardBuilder()
+    for text, link in items:
+        kb.button(text=text, url=link)
     kb.button(text="✅ Tekshirish", callback_data="check_sub")
     kb.adjust(1)
     return kb.as_markup()
 
 
-SUB_TEXT = "❗ Botdan foydalanish uchun quyidagi kanallarga obuna bo'ling, so'ng «✅ Tekshirish» ni bosing:"
+SUB_TEXT = (
+    "❗ Botdan foydalanish uchun quyidagilarni bajaring "
+    "(kanallarga obuna bo'ling, botlarda «Start» ni bosing), "
+    "so'ng «✅ Tekshirish» ni bosing:"
+)
 
 
 def is_admin(m: Message) -> bool:
@@ -184,7 +233,7 @@ async def add_movie_by_reply(m: Message):
 
 @dp.callback_query(F.data == "check_sub")
 async def check_sub(c: CallbackQuery, bot: Bot):
-    missing = await not_subscribed(bot, c.from_user.id)
+    missing = await missing_items(bot, c.from_user.id)
     if missing:
         await c.answer("Hali hamma kanalga obuna bo'lmagansiz ❌", show_alert=True)
         return
@@ -215,8 +264,8 @@ async def send_movie(m: Message, file_id: str, kind: str, title: str):
 
 @dp.callback_query(F.data.startswith("movie:"))
 async def movie_button(c: CallbackQuery, bot: Bot):
-    if CHANNELS and c.from_user.id not in ADMIN_IDS:
-        missing = await not_subscribed(bot, c.from_user.id)
+    if (CHANNELS or REQUIRED_BOTS) and c.from_user.id not in ADMIN_IDS:
+        missing = await missing_items(bot, c.from_user.id)
         if missing:
             await c.message.answer(SUB_TEXT, reply_markup=sub_kb(missing))
             await c.answer()
@@ -234,8 +283,8 @@ async def movie_button(c: CallbackQuery, bot: Bot):
 
 @dp.message(F.text & ~F.text.startswith("/"))
 async def get_movie(m: Message, bot: Bot):
-    if CHANNELS and not is_admin(m):
-        missing = await not_subscribed(bot, m.from_user.id)
+    if (CHANNELS or REQUIRED_BOTS) and not is_admin(m):
+        missing = await missing_items(bot, m.from_user.id)
         if missing:
             await m.answer(SUB_TEXT, reply_markup=sub_kb(missing))
             return
