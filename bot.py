@@ -101,22 +101,46 @@ async def add_movie_by_reply(m: Message):
     await m.answer(f"✅ Saqlandi. Kod: {code}")
 
 
-@dp.message(F.text & ~F.text.startswith("/"))
-async def get_movie(m: Message):
-    code = m.text.strip()
-    row = db.execute(
-        "SELECT file_id, kind, title FROM movies WHERE code = ?", (code,)
-    ).fetchone()
-    if not row:
-        await m.answer("❌ Bunday kodli kino topilmadi.")
-        return
-    file_id, kind, title = row
+async def send_movie(m: Message, file_id: str, kind: str, title: str):
     link = f"🤖 https://t.me/{BOT_INFO.get('username', '')}"
     caption = f"🎬 {title}\n\n{link}" if title else link
     if kind == "video":
         await m.answer_video(file_id, caption=caption)
     else:
         await m.answer_document(file_id, caption=caption)
+
+
+@dp.message(F.text & ~F.text.startswith("/"))
+async def get_movie(m: Message):
+    query = m.text.strip()
+
+    # 1) Kod bo'yicha aniq topish
+    row = db.execute(
+        "SELECT file_id, kind, title FROM movies WHERE code = ?", (query,)
+    ).fetchone()
+    if row:
+        await send_movie(m, *row)
+        return
+
+    # 2) Nom bo'yicha qidirish (katta-kichik harfga qaramaydi)
+    if len(query) < 2:
+        await m.answer("❌ Bunday kodli kino topilmadi.")
+        return
+    q = query.casefold()
+    rows = db.execute("SELECT code, file_id, kind, title FROM movies").fetchall()
+    found = [r for r in rows if q in (r[3] or "").casefold()]
+
+    if not found:
+        await m.answer("❌ Bunday kino topilmadi. Kod yoki nomini tekshirib qayta yozing.")
+    elif len(found) == 1:
+        _code, file_id, kind, title = found[0]
+        await send_movie(m, file_id, kind, title)
+    else:
+        lines = [f"{c} — {t}" for c, _f, _k, t in found[:30]]
+        await m.answer(
+            "🔎 Bir nechta kino topildi. Keraklisining kodini yozing:\n\n"
+            + "\n".join(lines)
+        )
 
 
 async def main():
