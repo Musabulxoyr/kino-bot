@@ -18,6 +18,7 @@ db.execute(
 db.commit()
 
 dp = Dispatcher()
+BOT_INFO = {}
 
 
 def is_admin(m: Message) -> bool:
@@ -108,7 +109,8 @@ async def get_movie(m: Message):
         await m.answer("❌ Bunday kodli kino topilmadi.")
         return
     file_id, kind, title = row
-    caption = f"🎬 {title}" if title else None
+    link = f"🤖 https://t.me/{BOT_INFO.get('username', '')}"
+    caption = f"🎬 {title}\n\n{link}" if title else link
     if kind == "video":
         await m.answer_video(file_id, caption=caption)
     else:
@@ -117,6 +119,8 @@ async def get_movie(m: Message):
 
 async def main():
     bot = Bot(TOKEN)
+    me = await bot.get_me()
+    BOT_INFO["username"] = me.username
     await dp.start_polling(bot)
 
 
