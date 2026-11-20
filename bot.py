@@ -58,24 +58,43 @@ async def delete_movie(m: Message, command: CommandObject):
     await m.answer("🗑 O'chirildi." if cur.rowcount else "Bunday kod topilmadi.")
 
 
-@dp.message(F.video | F.document, F.from_user.id == ADMIN_ID)
-async def add_movie(m: Message):
-    caption = (m.caption or "").strip()
-    if not caption:
-        await m.answer("Videoning izohiga kod yozing. Masalan: 125 Titanik")
-        return
-    parts = caption.split(maxsplit=1)
+def save_movie(src: Message, text: str) -> str:
+    parts = text.strip().split(maxsplit=1)
     code = parts[0]
     title = parts[1] if len(parts) > 1 else ""
-    if m.video:
-        file_id, kind = m.video.file_id, "video"
+    if src.video:
+        file_id, kind = src.video.file_id, "video"
     else:
-        file_id, kind = m.document.file_id, "document"
+        file_id, kind = src.document.file_id, "document"
     db.execute(
         "INSERT OR REPLACE INTO movies (code, file_id, kind, title) VALUES (?,?,?,?)",
         (code, file_id, kind, title),
     )
     db.commit()
+    return code
+
+
+@dp.message(F.video | F.document, F.from_user.id == ADMIN_ID)
+async def add_movie(m: Message):
+    # Uzatilgan (forward) video: kodni reply orqali olamiz
+    if m.forward_origin:
+        await m.reply("Kodni shu videoga javob (reply) qilib yozing. Masalan: 125 Titanik")
+        return
+    caption = (m.caption or "").strip()
+    if not caption:
+        await m.answer("Videoning izohiga kod yozing. Masalan: 125 Titanik")
+        return
+    code = save_movie(m, caption)
+    await m.answer(f"✅ Saqlandi. Kod: {code}")
+
+
+@dp.message(
+    F.text,
+    F.from_user.id == ADMIN_ID,
+    F.reply_to_message.video | F.reply_to_message.document,
+)
+async def add_movie_by_reply(m: Message):
+    code = save_movie(m.reply_to_message, m.text)
     await m.answer(f"✅ Saqlandi. Kod: {code}")
 
 
